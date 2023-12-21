@@ -1,0 +1,7 @@
+# github.com/xhd2015/go-inspect v0.0.47
+## explicit
+github.com/xhd2015/go-inspect/sh
+github.com/xhd2015/go-inspect/sh/process
+# golang.org/x/tools v0.8.0
+## explicit
+golang.org/x/tools/cover

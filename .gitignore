@@ -1,0 +1,19 @@
+# Created by .ignore support plugin (hsz.mobi)
+.idea
+.vscode
+.DS_Store
+
+log/all.log*
+
+cover.out
+
+debug.bin
+exec.bin
+
+__debug.bin
+
+test-res.json
+
+/vendor
+
+go.mod.tmp

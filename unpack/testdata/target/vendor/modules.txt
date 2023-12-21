@@ -1,0 +1,4 @@
+# github.com/xhd2015/go-inspect v0.0.46
+## explicit
+github.com/xhd2015/go-inspect/sh
+github.com/xhd2015/go-inspect/sh/process
