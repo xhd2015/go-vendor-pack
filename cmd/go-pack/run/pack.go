@@ -17,6 +17,8 @@ import (
 type Prog struct {
 
 	// dir string, pkg string, varName string, dstFile string
+
+	Dir                       string `prog:"dir '' working directory"`
 	Pkg                       string `prog:"pkg '' package name"`
 	Var                       string `prog:"var '' var name"`
 	Output                    string `prog:"o '' output file"`

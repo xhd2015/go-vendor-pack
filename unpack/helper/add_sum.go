@@ -60,36 +60,64 @@ func AddVersionAndSum(dir string, mod string, version string, sum string) error 
 		return err
 	}
 
+	// in vendor/modules.txt
+	//    after
+	//       # mod version
+	//    either
+	//       ## explicit
+	//       mod
+	//    or a list of packages like:
+	//       mod/pkgA
+	//       mod/pkgB
+	//   ....
 	lines := strings.Split(string(modulesContent), "\n")
 	n := len(lines)
-	prefix := "# " + mod + " "
+	prefixModSpace := "# " + mod + " "
 	// find previous explicit
 	i := 0
 	for ; i < n; i++ {
 		line := lines[i]
-		if strings.HasPrefix(line, prefix) {
-			if i+1 < n {
-				nextLine := lines[i+1]
-				if strings.TrimSpace(nextLine) == "## explicit" {
-					// found i
-					break
-				}
-			}
+		if strings.HasPrefix(line, prefixModSpace) {
+			// found module declaration
+			break
 		}
 	}
 	// example:
 	//   # githuh.com/example/support/tls v1.0.1
 	//   ## explicit
 	//   githuh.com/example/support/tls
-	if i < n {
-		lines[i] = prefix + version
+	var needAppendExplicit bool
+	if i >= n {
+		// not found any declaration, add new explicit
+		needAppendExplicit = true
 	} else {
+		// force replace version
+		if i+1 >= n || strings.TrimSpace(lines[i+1]) != "## explicit" {
+			// found detailed list, remove all packages until next module(starts with #)
+			// replace with explicit
+			for j := i + 1; j <= n; j++ {
+				if j >= n || strings.HasPrefix(lines[j], "#") {
+					// the range of [i,j-1] should be removed
+					m := j - i
+					for ; j < n; j++ {
+						lines[j-m] = lines[j]
+					}
+					lines = lines[:n-m]
+					break
+				}
+			}
+			needAppendExplicit = true
+		} else {
+			lines[i] = prefixModSpace + version
+		}
+	}
+	if needAppendExplicit {
 		// format:
 		//   # MODULE VERSION
 		//   ## explicit
 		//   # PKG
 		lines = append(lines,
-			prefix+version,
+			prefixModSpace+version,
 			"## explicit",
 			mod,
 		)
