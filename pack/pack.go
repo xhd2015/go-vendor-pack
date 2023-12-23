@@ -28,9 +28,11 @@ type Options struct {
 }
 
 // f, err := os.OpenFile(dstFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-// if err != nil {
-// 	return err
-// }
+//
+//	if err != nil {
+//		return err
+//	}
+//
 // defer f.Close()
 func PackAsBase64ToCode(dir string, pkg string, varName string, dstFile string, opts *Options) error {
 	data, err := PackAsBase64(dir, opts)
@@ -191,7 +193,14 @@ func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string
 	if err != nil {
 		return err
 	}
+	// sort modules
+	modulesSorted := make([]string, 0, len(moduleWhitelist))
 	for mod := range moduleWhitelist {
+		modulesSorted = append(modulesSorted, mod)
+	}
+	sort.Strings(modulesSorted)
+
+	for _, mod := range modulesSorted {
 		// add parent directories
 		modList := strings.Split(mod, "/")
 		for i := 1; i < len(modList); i++ {
