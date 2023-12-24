@@ -108,7 +108,8 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 
 	var buf bytes.Buffer
 	writer := base64.NewEncoder(base64.StdEncoding, &buf)
-	err = tarFilesAndVendors(dir, writer, opts.ModuleWhitelist)
+	// NOTE: when pack, always set clearModTime to be true
+	err = tarFilesAndVendors(dir, writer, opts.ModuleWhitelist, true /*clear mod time*/)
 	if err != nil {
 		return nil, err
 	}
@@ -171,17 +172,20 @@ func cleanVendors(dir string, moduleWhitelist map[string]bool) error {
 	}
 	return nil
 }
-func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string]bool) error {
+func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string]bool, clearModTime bool) error {
 	twWriter, close := tar.WrapTarWriter(writer)
 	defer close()
 	// if no whitelist, pack all
 	if len(moduleWhitelist) == 0 {
-		return tar.TarAppend(dir, twWriter, &tar.TarOptions{})
+		return tar.TarAppend(dir, twWriter, &tar.TarOptions{
+			ClearModTime: clearModTime,
+		})
 	}
 	// otherwise, pack only whitelist
 
 	// tar non-vendor first
 	err := tar.TarAppend(dir, twWriter, &tar.TarOptions{
+		ClearModTime: clearModTime,
 		ShouldInclude: func(relPath string, dir bool) bool {
 			return relPath != "vendor"
 		},
@@ -210,7 +214,8 @@ func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string
 			}
 		}
 		err = tar.TarAppend(path.Join(dir, "vendor", mod), twWriter, &tar.TarOptions{
-			WritePrefix: path.Join("vendor", mod),
+			ClearModTime: clearModTime,
+			WritePrefix:  path.Join("vendor", mod),
 		})
 		if err != nil {
 			return err

@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type TarOptions struct {
 	ShouldInclude func(relPath string, dir bool) bool
 	OnAdd         func(relPath string, dir bool)
 	WritePrefix   string
+	ClearModTime  bool
 }
 
 // Tar takes a source and variable writers and walks 'source' writing each file
@@ -77,6 +79,8 @@ func TarAppend(src string, tw *tar.Writer, opts *TarOptions) error {
 		if err != nil {
 			return err
 		}
+		// set zero time(to avoid tar content change for every generate)
+		header.ModTime = time.Time{}
 
 		// update the name to correctly reflect the desired destination when untaring
 		name := strings.TrimPrefix(strings.TrimPrefix(path, src), string(filepath.Separator))
@@ -148,6 +152,7 @@ func TarAdd(tw *tar.Writer, header *tar.Header, content io.Reader) error {
 	return err
 }
 
+// no modTime included
 func TarAddDir(tw *tar.Writer, name string, mode fs.FileMode) error {
 	return TarAdd(tw, &tar.Header{
 		Typeflag: tar.TypeDir,
