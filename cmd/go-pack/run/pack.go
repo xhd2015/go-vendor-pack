@@ -29,8 +29,10 @@ type Prog struct {
 	RemoveNonWhitelistVendors bool   `prog:"rm-non-whitelist-vendors false remove non-whitelist vendors"`
 
 	// for unpack
-	InputDataFile    string `prog:"input-data-file '' input data file"`
-	UnpackIgnoreSums bool   `prog:"unpack-ignore-sums false ignore sums when unpack"`
+	InputDataFile      string `prog:"input-data-file '' input data file"`
+	UnpackIgnoreSums   bool   `prog:"unpack-ignore-sums false ignore sums when unpack(deprecated,use -ignore-updating-sums instead)"`
+	IgnoreUpdatingSums bool   `prog:"ignore-updating-sums false ignore sums when unpack"`
+	OptionalSumModules string `prog:"optional-sum-modules '' a list of modules whose sum will be ignored"`
 }
 
 var progArgs Prog
@@ -80,28 +82,32 @@ func packCmd(commd string, args []string, extraArgs []string) {
 		fmt.Fprintf(os.Stderr, "requires output\n")
 		os.Exit(1)
 	}
-	var moduleWhitelist map[string]bool
-	if progArgs.ModuleWhitelist != "" {
-		modules := strings.Split(progArgs.ModuleWhitelist, ",")
-		moduleWhitelist = make(map[string]bool, len(modules))
-		for _, mod := range modules {
-			mod = strings.TrimSpace(mod)
-			if mod != "" {
-				moduleWhitelist[mod] = true
-			}
-		}
-	}
 	err := pack.PackAsBase64ToCode(dir, progArgs.Pkg, progArgs.Var, progArgs.Output, &pack.Options{
 		OutputDataFile:            progArgs.OutputDataFile,
 		RunGoModTidy:              progArgs.RunGoModTidy,
 		RunGoModVendor:            progArgs.RunGoModVendor,
-		ModuleWhitelist:           moduleWhitelist,
+		ModuleWhitelist:           commaListToMap(progArgs.ModuleWhitelist),
 		RemoveNonWhitelistVendors: progArgs.RemoveNonWhitelistVendors,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		os.Exit(1)
 	}
+}
+
+func commaListToMap(s string) map[string]bool {
+	if s == "" {
+		return nil
+	}
+	list := strings.Split(s, ",")
+	mapping := make(map[string]bool, len(list))
+	for _, e := range list {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			mapping[e] = true
+		}
+	}
+	return mapping
 }
 
 func showEnv(commd string, args []string, extraArgs []string) {

@@ -30,7 +30,8 @@ func unpackCmd(commd string, args []string, extraArgs []string) {
 		os.Exit(1)
 	}
 	err = unpack.UnpackFromBase64Decode(string(inputData), dir, &unpack.Options{
-		IgnoreSums: progArgs.UnpackIgnoreSums,
+		IgnoreUpdatingSums: progArgs.UnpackIgnoreSums,
+		OptionalSumModules: commaListToMap(progArgs.OptionalSumModules),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)

@@ -23,7 +23,10 @@ type Options struct {
 	ForceUpgradeAllModules bool
 	ForceUpgradeModules    map[string]bool
 	ForceUpgradeModulePkgs map[string]map[string]bool // exmaple: {"a.b.c":{"d":true}}, NOTE: sub path should be relative
-	IgnoreSums             bool
+	// deprecated, use IgnoreUpdatingSums instead
+	IgnoreSums         bool
+	IgnoreUpdatingSums bool
+	OptionalSumModules map[string]bool // some modules is replaced, they will not appear in go.sum
 }
 
 func NewTarFSWithBase64Decode(s string) (packfs.FS, error) {
@@ -105,9 +108,10 @@ func Unpack(fs packfs.FS, dir string, opts *Options) error {
 			continue
 		}
 		// get sum
+		optionalSum := opts.OptionalSumModules[module]
 		sums := goSumMapping[module]
-		if len(sums) == 0 {
-			continue
+		if len(sums) == 0 && !optionalSum {
+			return fmt.Errorf("module %s does not appear in go.sum, check if it is replaced, if so add it to OptionalSumModules", module)
 		}
 		targetDir := dir
 		if !hasVendorDir {
@@ -117,7 +121,7 @@ func Unpack(fs packfs.FS, dir string, opts *Options) error {
 		if err != nil {
 			return fmt.Errorf("unpacking %s: add vendor: %w", module, err)
 		}
-		if added && !opts.IgnoreSums {
+		if added && !(opts.IgnoreUpdatingSums || opts.IgnoreSums) {
 			modSums := make([]string, 0, len(sums))
 			for _, sum := range sums {
 				modSums = append(modSums, fmt.Sprintf("%s %s", module, sum))
