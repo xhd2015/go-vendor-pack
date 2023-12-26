@@ -28,9 +28,11 @@ type Options struct {
 }
 
 // f, err := os.OpenFile(dstFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
-// if err != nil {
-// 	return err
-// }
+//
+//	if err != nil {
+//		return err
+//	}
+//
 // defer f.Close()
 func PackAsBase64ToCode(dir string, pkg string, varName string, dstFile string, opts *Options) error {
 	data, err := PackAsBase64(dir, opts)
@@ -106,7 +108,8 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 
 	var buf bytes.Buffer
 	writer := base64.NewEncoder(base64.StdEncoding, &buf)
-	err = tarFilesAndVendors(dir, writer, opts.ModuleWhitelist)
+	// NOTE: when pack, always set clearModTime to be true
+	err = tarFilesAndVendors(dir, writer, opts.ModuleWhitelist, true /*clear mod time*/)
 	if err != nil {
 		return nil, err
 	}
@@ -169,17 +172,20 @@ func cleanVendors(dir string, moduleWhitelist map[string]bool) error {
 	}
 	return nil
 }
-func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string]bool) error {
+func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string]bool, clearModTime bool) error {
 	twWriter, close := tar.WrapTarWriter(writer)
 	defer close()
 	// if no whitelist, pack all
 	if len(moduleWhitelist) == 0 {
-		return tar.TarAppend(dir, twWriter, &tar.TarOptions{})
+		return tar.TarAppend(dir, twWriter, &tar.TarOptions{
+			ClearModTime: clearModTime,
+		})
 	}
 	// otherwise, pack only whitelist
 
 	// tar non-vendor first
 	err := tar.TarAppend(dir, twWriter, &tar.TarOptions{
+		ClearModTime: clearModTime,
 		ShouldInclude: func(relPath string, dir bool) bool {
 			return relPath != "vendor"
 		},
@@ -191,7 +197,14 @@ func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string
 	if err != nil {
 		return err
 	}
+	// sort modules
+	modulesSorted := make([]string, 0, len(moduleWhitelist))
 	for mod := range moduleWhitelist {
+		modulesSorted = append(modulesSorted, mod)
+	}
+	sort.Strings(modulesSorted)
+
+	for _, mod := range modulesSorted {
 		// add parent directories
 		modList := strings.Split(mod, "/")
 		for i := 1; i < len(modList); i++ {
@@ -201,7 +214,8 @@ func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string
 			}
 		}
 		err = tar.TarAppend(path.Join(dir, "vendor", mod), twWriter, &tar.TarOptions{
-			WritePrefix: path.Join("vendor", mod),
+			ClearModTime: clearModTime,
+			WritePrefix:  path.Join("vendor", mod),
 		})
 		if err != nil {
 			return err
