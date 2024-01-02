@@ -3,7 +3,6 @@ package unpack
 import (
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -126,7 +125,7 @@ func Unpack(fs packfs.FS, dir string, opts *Options) error {
 			for _, sum := range sums {
 				modSums = append(modSums, fmt.Sprintf("%s %s", module, sum))
 			}
-			err := helper.AddVersionAndSum(dir, module, version, strings.Join(modSums, "\n"))
+			err := helper.AddVersionAndSum(dir, module, version, strings.Join(modSums, "\n"), "")
 			if err != nil {
 				return fmt.Errorf("unpacking %s: add dep %v", module, err)
 			}
@@ -144,26 +143,9 @@ func Unpack(fs packfs.FS, dir string, opts *Options) error {
 				return fmt.Errorf("replacing non-vendor module:%s %w", module, err)
 			}
 
-			// always rewrite go.mod to clear transitive dependencies
-			// this is an important trick to fool/hack the go build
-			needClearGoMod := true
-			tmpModuleGoMod := path.Join(tmpModuleDir, "go.mod")
-
-			// check if go.mod already exists
-			// _, statErr := os.Stat(tmpModuleGoMod)
-			// if statErr != nil {
-			// 	if !os.IsNotExist(statErr) {
-			// 		return fmt.Errorf("check go.mod for %s: %w", module, statErr)
-			// 	}
-			// }
-			if needClearGoMod {
-				// it's important to add go version declaration(e.g. go 1.18)
-				// because go build system depends on this directive to
-				// decide whether a feature can be used(like generic)
-				err = ioutil.WriteFile(tmpModuleGoMod, []byte(fmt.Sprintf("module %s\n\ngo %d.%d\n", module, goVersion.Major, goVersion.Minor)), 0755)
-				if err != nil {
-					return fmt.Errorf("write missing go.mod for %s: %w", module, err)
-				}
+			err = helper.TruncateGoMod(path.Join(tmpModuleDir, "go.mod"), module, goVersion.Major, goVersion.Minor)
+			if err != nil {
+				return err
 			}
 		}
 	}

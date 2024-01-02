@@ -12,16 +12,20 @@ import (
 	"github.com/xhd2015/go-inspect/sh"
 )
 
-func AddVersionAndSum(dir string, mod string, version string, sum string) error {
+func AddVersionAndSum(dir string, mod string, version string, sum string, replace string) error {
 	// go mod edit
-	_, _, err := sh.RunBashWithOpts([]string{
+	cmds := []string{
 		`go mod edit -require="$IMPORT_PATH@$IMPORT_VERSION"`,
-	}, sh.RunBashOptions{
-
+	}
+	if replace != "" {
+		cmds = append(cmds, `go mod edit -replace="$IMPORT_PATH=$IMPORT_REPLACE"`)
+	}
+	_, _, err := sh.RunBashWithOpts(cmds, sh.RunBashOptions{
 		FilterCmd: func(cmd *exec.Cmd) {
 			cmd.Env = os.Environ()
 			cmd.Env = append(cmd.Env, "IMPORT_PATH="+mod)
 			cmd.Env = append(cmd.Env, "IMPORT_VERSION="+version)
+			cmd.Env = append(cmd.Env, "IMPORT_REPLACE="+replace)
 			cmd.Dir = dir
 		},
 	})
@@ -44,9 +48,11 @@ func AddVersionAndSum(dir string, mod string, version string, sum string) error 
 		}
 		return nil
 	}
-	err = addGoSum()
-	if err != nil {
-		return fmt.Errorf("updating go.sum: %w", err)
+	if sum != "" {
+		err = addGoSum()
+		if err != nil {
+			return fmt.Errorf("updating go.sum: %w", err)
+		}
 	}
 
 	// update modules.txt

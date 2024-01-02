@@ -21,6 +21,14 @@ func AddVendor(dir string, module string, fs packfs.FS, overrideAll bool, overri
 	return
 }
 
+func OverrideFiles(fs packfs.FS, srcDir string, dstDir string) error {
+	_, err := overrideFiles(fs, srcDir, dstDir, true)
+	return err
+}
+func CopyFiles(fs packfs.FS, name string, dir string, shouldOverrideFiles func(subPath string) bool) error {
+	return copyDirOverrideFiles(fs, name, dir, shouldOverrideFiles)
+}
+
 // copyDirOverrideFiles will override files, but do not delete dirs
 // equivalent: cp name/* dir/*
 // e.g. copy anything under name to dir
@@ -29,76 +37,9 @@ func AddVendor(dir string, module string, fs packfs.FS, overrideAll bool, overri
 func copyDirOverrideFiles(fs packfs.FS, name string, dir string, shouldOverrideFiles func(subPath string) bool) error {
 	var copyDir func(name string, dir string, relPath string) error
 	copyDir = func(name string, dir string, relPath string) error {
-		dirExists := true
-		_, statErr := os.Stat(dir)
-		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				dirExists = false
-			} else {
-				return statErr
-			}
-		}
-
-		srcEntries, err := fs.ReadDir(name)
+		srcDirs, err := overrideFiles(fs, name, dir, shouldOverrideFiles != nil && shouldOverrideFiles(relPath))
 		if err != nil {
 			return err
-		}
-		var srcFiles []string
-		var srcDirs []string
-		// copy all source files
-		for _, entry := range srcEntries {
-			subName := entry.Name()
-			if entry.IsDir() {
-				srcDirs = append(srcDirs, subName)
-			} else {
-				srcFiles = append(srcFiles, subName)
-			}
-		}
-
-		if len(srcFiles) > 0 {
-			var override bool
-			if !dirExists {
-				log.Printf("package added: %v", name)
-			} else {
-				override = shouldOverrideFiles != nil && shouldOverrideFiles(relPath)
-				if override {
-					log.Printf("package override: %v", name)
-				} else {
-					log.Printf("package reuse: %v", name)
-				}
-			}
-
-			// override files when dir does not exist or should be overridden
-			if !dirExists || override {
-				err := os.MkdirAll(dir, 0755)
-				if err != nil {
-					return err
-				}
-
-				dstEntries, err := ioutil.ReadDir(dir)
-				if err != nil {
-					return err
-				}
-				// remove all dst files, except dirs
-				for _, dstEntry := range dstEntries {
-					if dstEntry.IsDir() {
-						continue
-					}
-					err := os.Remove(path.Join(dir, dstEntry.Name()))
-					if err != nil {
-						return fmt.Errorf("remove file in original directory: %w", err)
-					}
-				}
-				// copy all source files
-				for _, srcFileName := range srcFiles {
-					subFile := path.Join(dir, srcFileName)
-					targetName := filepath.Join(name, srcFileName)
-					err := CopyFile(fs, targetName, subFile)
-					if err != nil {
-						return err
-					}
-				}
-			}
 		}
 		// check all sub directorys
 		for _, srcDirName := range srcDirs {
@@ -113,6 +54,98 @@ func copyDirOverrideFiles(fs packfs.FS, name string, dir string, shouldOverrideF
 		return nil
 	}
 	return copyDir(name, dir, "")
+}
+
+func overrideFiles(fs packfs.FS, srcFsPath string, dstDir string, override bool) (srcDirs []string, err error) {
+	var srcFiles []string
+	srcFiles, srcDirs, err = readEntries(fs, srcFsPath)
+	if err != nil {
+		return
+	}
+
+	if len(srcFiles) == 0 {
+		return
+	}
+	var dirExists bool
+	dirExists, err = checkDirForRemoving(dstDir, override)
+	if err != nil {
+		err = fmt.Errorf("remove file in original directory: %w", err)
+		return
+	}
+
+	if !dirExists {
+		log.Printf("package added: %v", srcFsPath)
+		err = os.MkdirAll(dstDir, 0755)
+		if err != nil {
+			return
+		}
+	} else {
+		if override {
+			log.Printf("package override: %v", srcFsPath)
+		} else {
+			log.Printf("package reuse: %v", srcFsPath)
+			return
+		}
+	}
+	// override files when dir does not exist or should be overridden
+	// copy all source files
+	for _, srcFileName := range srcFiles {
+		subFile := path.Join(dstDir, srcFileName)
+		targetName := filepath.Join(srcFsPath, srcFileName)
+		err = CopyFile(fs, targetName, subFile)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func checkDirForRemoving(dir string, override bool) (dirExists bool, err error) {
+	if !override {
+		_, err := os.Stat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	dstEntries, err := ioutil.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	// remove all dst files, except dirs
+	for _, dstEntry := range dstEntries {
+		if dstEntry.IsDir() {
+			continue
+		}
+		err := os.Remove(path.Join(dir, dstEntry.Name()))
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func readEntries(fs packfs.FS, name string) (srcFiles []string, srcDirs []string, err error) {
+	srcEntries, err := fs.ReadDir(name)
+	if err != nil {
+		return
+	}
+	// copy all source files
+	for _, entry := range srcEntries {
+		subName := entry.Name()
+		if entry.IsDir() {
+			srcDirs = append(srcDirs, subName)
+		} else {
+			srcFiles = append(srcFiles, subName)
+		}
+	}
+	return
 }
 
 // CopyFile
