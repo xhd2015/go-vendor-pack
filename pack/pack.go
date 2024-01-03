@@ -271,10 +271,27 @@ func GetPkgVersion(dir string, pkg string) (string, error) {
 // can use this: go:generate cd pkg && go list -f '{{.ImportPath}} {{if .Module}}{{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions
 func UpdateGoVersions(dir string) error {
 	// return sh.RunBash([]string{"go list -f '{{.ImportPath}} {{if .Module}}{{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions"}, false)
-	_, _, err := sh.RunBashWithOpts([]string{"go list -f '{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions"}, sh.RunBashOptions{
+	var buf bytes.Buffer
+	_, _, err := sh.RunBashWithOpts([]string{"go list -f '{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{else}}{{end}}' -deps"}, sh.RunBashOptions{
 		FilterCmd: func(cmd *exec.Cmd) {
 			cmd.Dir = dir
+			cmd.Stdout = &buf
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(buf.String(), "\n")
+	sort.Strings(lines)
+
+	// invariant: [j,j) is uniq
+	j := 0
+	for i := 0; i < len(lines); i++ {
+		if lines[i] != "" && (i == 0 || lines[i] != lines[i-1]) {
+			lines[j] = lines[i]
+			j++
+		}
+	}
+	// sort uniq
+	return ioutil.WriteFile(path.Join(dir, "go.mod.versions"), []byte(strings.Join(lines[:j], "\n")), 0755)
 }
