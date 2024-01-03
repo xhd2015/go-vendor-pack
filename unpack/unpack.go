@@ -2,6 +2,7 @@ package unpack
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/xhd2015/go-inspect/sh"
 	"github.com/xhd2015/go-vendor-pack/go_info"
+	pack_model "github.com/xhd2015/go-vendor-pack/pack/model"
 	"github.com/xhd2015/go-vendor-pack/packfs"
 	"github.com/xhd2015/go-vendor-pack/tar"
 	"github.com/xhd2015/go-vendor-pack/unpack/helper"
@@ -41,6 +43,22 @@ func UnpackFromBase64Decode(s string, dir string, opts *Options) error {
 		return err
 	}
 	return Unpack(fs, dir, opts)
+}
+
+func ReadGoList(fs packfs.FS) (*pack_model.GoList, error) {
+	jsonData, err := fs.ReadFile("go.list.json")
+	if err != nil {
+		if !packfs.IsNotExists(err) {
+			return nil, fmt.Errorf("missing go.list.json")
+		}
+		return nil, err
+	}
+	var goList *pack_model.GoList
+	err = json.Unmarshal(jsonData, &goList)
+	if err != nil {
+		return nil, err
+	}
+	return goList, nil
 }
 
 func Unpack(fs packfs.FS, dir string, opts *Options) error {

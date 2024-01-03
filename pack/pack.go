@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,8 +14,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	pack_model "github.com/xhd2015/go-vendor-pack/pack/model"
 
 	"github.com/xhd2015/go-inspect/sh"
+	"github.com/xhd2015/go-vendor-pack/go_cmd"
+	"github.com/xhd2015/go-vendor-pack/go_cmd/model"
 
 	"github.com/xhd2015/go-vendor-pack/tar"
 )
@@ -76,16 +82,39 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 			return nil, err
 		}
 	}
+
+	// TODO: deprecate go.mod.versions
 	err := UpdateGoVersions(dir)
 	if err != nil {
 		return nil, err
 	}
+	modulesMapping, modules, err := GetGoListModules(dir)
+	if err != nil {
+		return nil, err
+	}
 
+	goMod, err := go_cmd.ParseGoMod(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: deprecate go.mod.whitelist
 	goModWhitelist := path.Join(dir, "go.mod.whitelist")
 	if len(opts.ModuleWhitelist) > 0 {
 		whiteList := make([]string, 0, len(opts.ModuleWhitelist))
+		oldModules := modules
+		modules = make([]*pack_model.Module, 0, len(opts.ModuleWhitelist))
+		for _, m := range oldModules {
+			if !opts.ModuleWhitelist[m.Path] {
+				continue
+			}
+			modules = append(modules, m)
+		}
 		for mod := range opts.ModuleWhitelist {
 			whiteList = append(whiteList, mod)
+			if modulesMapping[mod] == nil {
+				return nil, fmt.Errorf("specified whitelist module does not exist: %s", mod)
+			}
 		}
 		// sort whiteList
 		sort.Strings(whiteList)
@@ -104,6 +133,21 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cleaning go mod whitelist: %w", err)
 		}
+	}
+
+	// write go.list.json
+	goList := &pack_model.GoList{
+		PackTimeUTC: time.Now().UTC().Format("2006-01-02 15:04:05"),
+		GoMod:       goMod,
+		Modules:     modules,
+	}
+	goListJSON, err := json.Marshal(goList)
+	if err != nil {
+		return nil, err
+	}
+	err = ioutil.WriteFile(filepath.Join(dir, "go.list.json"), goListJSON, 0755)
+	if err != nil {
+		return nil, fmt.Errorf("generating go.list.json: %w", err)
 	}
 
 	var buf bytes.Buffer
@@ -269,6 +313,7 @@ func GetPkgVersion(dir string, pkg string) (string, error) {
 }
 
 // can use this: go:generate cd pkg && go list -f '{{.ImportPath}} {{if .Module}}{{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions
+// Deprecated
 func UpdateGoVersions(dir string) error {
 	// return sh.RunBash([]string{"go list -f '{{.ImportPath}} {{if .Module}}{{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions"}, false)
 	var buf bytes.Buffer
@@ -294,4 +339,43 @@ func UpdateGoVersions(dir string) error {
 	}
 	// sort uniq
 	return ioutil.WriteFile(path.Join(dir, "go.mod.versions"), []byte(strings.Join(lines[:j], "\n")), 0755)
+}
+
+// can use this: go:generate cd pkg && go list -f '{{.ImportPath}} {{if .Module}}{{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions
+// main module is excluded
+func GetGoListModules(dir string) (map[string]*pack_model.Module, []*pack_model.Module, error) {
+	pkgs, err := go_cmd.ListPackages(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	moduleMapping := make(map[string]*pack_model.Module)
+	var modules []*pack_model.Module
+	for _, pkg := range pkgs {
+		// skip standard packages
+		if pkg.Standard {
+			continue
+		}
+		if pkg.Module == nil || pkg.Module.Path == "" {
+			return nil, nil, fmt.Errorf("non module package: %v", pkg.ImportPath)
+		}
+		mod, ok := moduleMapping[pkg.Module.Path]
+		if !ok {
+			mod = &pack_model.Module{
+				ModulePublic: &model.ModulePublic{
+					Path:      pkg.Module.Path,
+					Version:   pkg.Module.Version,
+					GoVersion: pkg.Module.GoVersion,
+					Indirect:  pkg.Module.Indirect,
+				},
+			}
+			modules = append(modules, mod)
+			moduleMapping[pkg.Module.Path] = mod
+		}
+		mod.Packages = append(mod.Packages, &model.PackagePublic{
+			ImportPath: pkg.ImportPath,
+			Name:       pkg.Name,
+		})
+	}
+	return moduleMapping, modules, nil
 }
