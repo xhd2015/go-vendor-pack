@@ -24,16 +24,21 @@ type TarOptions struct {
 // found to the tar writer; the purpose for accepting multiple writers is to allow
 // for multiple outputs (for example a file, or md5 hash)
 func Tar(src string, writer io.Writer, opts *TarOptions) error {
-	tw, close := WrapTarWriter(writer)
+	tw, _, close := WrapTarWriter(writer)
 	defer close()
 	return TarAppend(src, tw, opts)
 }
-func WrapTarWriter(writer io.Writer) (tw *tar.Writer, close func() error) {
+func WrapTarWriter(writer io.Writer) (tw *tar.Writer, flush func() error, close func() error) {
 	mw := writer
 
 	gzw := gzip.NewWriter(mw)
 
 	tw = tar.NewWriter(gzw)
+	flush = func() error {
+		tw.Flush()
+		gzw.Flush()
+		return nil
+	}
 	close = func() error {
 		twErr := tw.Close()
 		gzErr := gzw.Close()
@@ -159,4 +164,14 @@ func TarAddDir(tw *tar.Writer, name string, mode fs.FileMode) error {
 		Name:     name,
 		Mode:     int64(mode),
 	}, nil)
+}
+
+// no modTime included
+func TarAddFile(tw *tar.Writer, name string, size int64, mode fs.FileMode, content io.Reader) error {
+	return TarAdd(tw, &tar.Header{
+		Typeflag: tar.TypeReg,
+		Name:     name,
+		Mode:     int64(mode),
+		Size:     size,
+	}, content)
 }

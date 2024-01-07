@@ -1,9 +1,11 @@
 package pack
 
 import (
+	tarlib "archive/tar"
 	"bytes"
-	_ "embed"
+	"crypto/md5"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,6 +61,8 @@ var %s = "%s"
 	}
 	return ioutil.WriteFile(dstFile, []byte(code), 0755)
 }
+
+const FILE_GO_LIST_JSON = "go.list.json"
 
 func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 	if opts == nil {
@@ -135,28 +139,53 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 		}
 	}
 
-	// write go.list.json
-	goList := &pack_model.GoList{
-		PackTimeUTC: time.Now().UTC().Format("2006-01-02 15:04:05"),
-		GoMod:       goMod,
-		Modules:     modules,
-	}
-	goListJSON, err := json.Marshal(goList)
-	if err != nil {
-		return nil, err
-	}
-	err = ioutil.WriteFile(filepath.Join(dir, "go.list.json"), goListJSON, 0755)
-	if err != nil {
-		return nil, fmt.Errorf("generating go.list.json: %w", err)
-	}
-
+	h := md5.New()
 	var buf bytes.Buffer
 	writer := base64.NewEncoder(base64.StdEncoding, &buf)
 	// NOTE: when pack, always set clearModTime to be true
-	err = tarFilesAndVendors(dir, writer, opts.ModuleWhitelist, true /*clear mod time*/)
+	err = tarFilesAndVendors(dir, io.MultiWriter(writer, h), FILE_GO_LIST_JSON, opts.ModuleWhitelist, true /*clear mod time*/, func(twWriter *tarlib.Writer) error {
+		digest := hex.EncodeToString(h.Sum(nil))
+
+		var prevDigest string
+		goListJSONFile := filepath.Join(dir, FILE_GO_LIST_JSON)
+		origData, fileErr := ioutil.ReadFile(goListJSONFile)
+		if fileErr != nil {
+			if !os.IsNotExist(fileErr) {
+				return fileErr
+			}
+		} else {
+			type GoListDigest struct {
+				Digest string
+			}
+			var goListDigest GoListDigest
+			json.Unmarshal(origData, &goListDigest)
+			prevDigest = goListDigest.Digest
+		}
+		goListData := origData
+		if prevDigest == "" || prevDigest != digest {
+			// write go.list.json
+			goListJSON, err := json.Marshal(&pack_model.GoList{
+				PackTimeUTC: time.Now().UTC().Format("2006-01-02 15:04:05"),
+				Digest:      digest,
+				GoMod:       goMod,
+				Modules:     modules,
+			})
+			if err != nil {
+				return err
+			}
+			goListData = goListJSON
+			// update go.list.json only when anything changes
+			err = ioutil.WriteFile(goListJSONFile, goListJSON, 0755)
+			if err != nil {
+				return fmt.Errorf("generating go.list.json: %w", err)
+			}
+		}
+		return tar.TarAddFile(twWriter, FILE_GO_LIST_JSON, int64(len(goListData)), 0755, bytes.NewReader(goListData))
+	})
 	if err != nil {
 		return nil, err
 	}
+
 	return buf.Bytes(), nil
 }
 func cleanVendors(dir string, moduleWhitelist map[string]bool) error {
@@ -216,51 +245,65 @@ func cleanVendors(dir string, moduleWhitelist map[string]bool) error {
 	}
 	return nil
 }
-func tarFilesAndVendors(dir string, writer io.Writer, moduleWhitelist map[string]bool, clearModTime bool) error {
-	twWriter, close := tar.WrapTarWriter(writer)
+func tarFilesAndVendors(dir string, writer io.Writer, excludeFile string, moduleWhitelist map[string]bool, clearModTime bool, afterWritten func(twWriter *tarlib.Writer) error) error {
+	twWriter, flush, close := tar.WrapTarWriter(writer)
 	defer close()
+
 	// if no whitelist, pack all
 	if len(moduleWhitelist) == 0 {
-		return tar.TarAppend(dir, twWriter, &tar.TarOptions{
+		err := tar.TarAppend(dir, twWriter, &tar.TarOptions{
 			ClearModTime: clearModTime,
+			ShouldInclude: func(relPath string, dir bool) bool {
+				return relPath != excludeFile
+			},
 		})
-	}
-	// otherwise, pack only whitelist
+		if err != nil {
+			return err
+		}
+	} else {
+		// otherwise, pack only whitelist
+		// tar non-vendor first
+		err := tar.TarAppend(dir, twWriter, &tar.TarOptions{
+			ClearModTime: clearModTime,
+			ShouldInclude: func(relPath string, dir bool) bool {
+				return relPath != "vendor" && relPath != excludeFile
+			},
+		})
+		if err != nil {
+			return err
+		}
+		err = tar.TarAddDir(twWriter, "vendor", 0755)
+		if err != nil {
+			return err
+		}
+		// sort modules
+		modulesSorted := make([]string, 0, len(moduleWhitelist))
+		for mod := range moduleWhitelist {
+			modulesSorted = append(modulesSorted, mod)
+		}
+		sort.Strings(modulesSorted)
 
-	// tar non-vendor first
-	err := tar.TarAppend(dir, twWriter, &tar.TarOptions{
-		ClearModTime: clearModTime,
-		ShouldInclude: func(relPath string, dir bool) bool {
-			return relPath != "vendor"
-		},
-	})
-	if err != nil {
-		return err
-	}
-	err = tar.TarAddDir(twWriter, "vendor", 0755)
-	if err != nil {
-		return err
-	}
-	// sort modules
-	modulesSorted := make([]string, 0, len(moduleWhitelist))
-	for mod := range moduleWhitelist {
-		modulesSorted = append(modulesSorted, mod)
-	}
-	sort.Strings(modulesSorted)
-
-	for _, mod := range modulesSorted {
-		// add parent directories
-		modList := strings.Split(mod, "/")
-		for i := 1; i < len(modList); i++ {
-			err := tar.TarAddDir(twWriter, path.Join("vendor", path.Join(modList[:i]...)), 0755)
+		for _, mod := range modulesSorted {
+			// add parent directories
+			modList := strings.Split(mod, "/")
+			for i := 1; i < len(modList); i++ {
+				err := tar.TarAddDir(twWriter, path.Join("vendor", path.Join(modList[:i]...)), 0755)
+				if err != nil {
+					return err
+				}
+			}
+			err = tar.TarAppend(path.Join(dir, "vendor", mod), twWriter, &tar.TarOptions{
+				ClearModTime: clearModTime,
+				WritePrefix:  path.Join("vendor", mod),
+			})
 			if err != nil {
 				return err
 			}
 		}
-		err = tar.TarAppend(path.Join(dir, "vendor", mod), twWriter, &tar.TarOptions{
-			ClearModTime: clearModTime,
-			WritePrefix:  path.Join("vendor", mod),
-		})
+	}
+	if afterWritten != nil {
+		flush()
+		err := afterWritten(twWriter)
 		if err != nil {
 			return err
 		}
