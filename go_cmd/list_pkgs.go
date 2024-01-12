@@ -13,6 +13,7 @@ func ListPackages(dir string, args ...string) ([]*model.PackagePublic, error) {
 	var buf bytes.Buffer
 	var errBuf bytes.Buffer
 
+	// NOTE: by default test packages not included(included by go list -test)
 	listArgs := append([]string{"list", "-deps", "-json"}, args...)
 	cmd := exec.Command("go", listArgs...)
 	cmd.Dir = dir

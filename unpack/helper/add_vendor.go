@@ -2,19 +2,19 @@ package helper
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
 
 	"github.com/xhd2015/go-vendor-pack/packfs"
+	"github.com/xhd2015/go-vendor-pack/writefs"
 )
 
 // must ensure HasVendor
 func AddVendor(dir string, module string, fs packfs.FS, overrideAll bool, overrideSubPath map[string]bool) (added bool, err error) {
 	vendorName := filepath.Join("vendor", module)
-	err = copyDirOverrideFiles(fs, vendorName, filepath.Join(dir, vendorName), func(subPath string) bool {
+	err = copyDirOverrideFiles(fs, writefs.SysFS{}, vendorName, filepath.Join(dir, vendorName), func(subPath string) bool {
 		return overrideAll || overrideSubPath[subPath]
 	})
 	added = true
@@ -22,11 +22,18 @@ func AddVendor(dir string, module string, fs packfs.FS, overrideAll bool, overri
 }
 
 func OverrideFiles(fs packfs.FS, srcDir string, dstDir string) error {
-	_, err := overrideFiles(fs, srcDir, dstDir, true)
-	return err
+	return OverrideFilesFS(fs, writefs.SysFS{}, srcDir, dstDir)
 }
 func CopyFiles(fs packfs.FS, name string, dir string, shouldOverrideFiles func(subPath string) bool) error {
-	return copyDirOverrideFiles(fs, name, dir, shouldOverrideFiles)
+	return CopyFilesFS(fs, writefs.SysFS{}, name, dir, shouldOverrideFiles)
+}
+
+func OverrideFilesFS(fs packfs.FS, wfs writefs.FS, srcDir string, dstDir string) error {
+	_, err := overrideFiles(fs, wfs, srcDir, dstDir, true)
+	return err
+}
+func CopyFilesFS(fs packfs.FS, wfs writefs.FS, name string, dir string, shouldOverrideFiles func(subPath string) bool) error {
+	return copyDirOverrideFiles(fs, wfs, name, dir, shouldOverrideFiles)
 }
 
 // copyDirOverrideFiles will override files, but do not delete dirs
@@ -34,10 +41,10 @@ func CopyFiles(fs packfs.FS, name string, dir string, shouldOverrideFiles func(s
 // e.g. copy anything under name to dir
 // this copy is aware of go's module inclusion logic, where files form a package, not dirs.
 // it treats all files as a unit, and either replace them all or just change nothing.
-func copyDirOverrideFiles(fs packfs.FS, name string, dir string, shouldOverrideFiles func(subPath string) bool) error {
+func copyDirOverrideFiles(fs packfs.FS, wfs writefs.FS, name string, dir string, shouldOverrideFiles func(subPath string) bool) error {
 	var copyDir func(name string, dir string, relPath string) error
 	copyDir = func(name string, dir string, relPath string) error {
-		srcDirs, err := overrideFiles(fs, name, dir, shouldOverrideFiles != nil && shouldOverrideFiles(relPath))
+		srcDirs, err := overrideFiles(fs, wfs, name, dir, shouldOverrideFiles != nil && shouldOverrideFiles(relPath))
 		if err != nil {
 			return err
 		}
@@ -56,7 +63,9 @@ func copyDirOverrideFiles(fs packfs.FS, name string, dir string, shouldOverrideF
 	return copyDir(name, dir, "")
 }
 
-func overrideFiles(fs packfs.FS, srcFsPath string, dstDir string, override bool) (srcDirs []string, err error) {
+const verboseLog = false
+
+func overrideFiles(fs packfs.FS, wfs writefs.FS, srcFsPath string, dstDir string, override bool) (srcDirs []string, err error) {
 	var srcFiles []string
 	srcFiles, srcDirs, err = readEntries(fs, srcFsPath)
 	if err != nil {
@@ -67,23 +76,29 @@ func overrideFiles(fs packfs.FS, srcFsPath string, dstDir string, override bool)
 		return
 	}
 	var dirExists bool
-	dirExists, err = checkDirForRemoving(dstDir, override)
+	dirExists, err = checkDirForRemoving(wfs, dstDir, override)
 	if err != nil {
 		err = fmt.Errorf("remove file in original directory: %w", err)
 		return
 	}
 
 	if !dirExists {
-		log.Printf("package added: %v", srcFsPath)
-		err = os.MkdirAll(dstDir, 0755)
+		if verboseLog {
+			log.Printf("package added: %v", srcFsPath)
+		}
+		err = wfs.MkdirAll(dstDir, 0755)
 		if err != nil {
 			return
 		}
 	} else {
 		if override {
-			log.Printf("package override: %v", srcFsPath)
+			if verboseLog {
+				log.Printf("package override: %v", srcFsPath)
+			}
 		} else {
-			log.Printf("package reuse: %v", srcFsPath)
+			if verboseLog {
+				log.Printf("package reuse: %v", srcFsPath)
+			}
 			return
 		}
 	}
@@ -92,7 +107,7 @@ func overrideFiles(fs packfs.FS, srcFsPath string, dstDir string, override bool)
 	for _, srcFileName := range srcFiles {
 		subFile := path.Join(dstDir, srcFileName)
 		targetName := filepath.Join(srcFsPath, srcFileName)
-		err = CopyFile(fs, targetName, subFile)
+		err = CopyFileWFS(fs, wfs, targetName, subFile)
 		if err != nil {
 			return
 		}
@@ -100,20 +115,20 @@ func overrideFiles(fs packfs.FS, srcFsPath string, dstDir string, override bool)
 	return
 }
 
-func checkDirForRemoving(dir string, override bool) (dirExists bool, err error) {
+func checkDirForRemoving(wfs writefs.FS, dir string, override bool) (dirExists bool, err error) {
 	if !override {
-		_, err := os.Stat(dir)
+		_, err := wfs.Stat(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if writefs.IsNotExist(err) {
 				return false, nil
 			}
 			return false, err
 		}
 		return true, nil
 	}
-	dstEntries, err := ioutil.ReadDir(dir)
+	dstEntries, err := wfs.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if writefs.IsNotExist(err) {
 			return false, nil
 		}
 		return false, err
@@ -123,8 +138,11 @@ func checkDirForRemoving(dir string, override bool) (dirExists bool, err error) 
 		if dstEntry.IsDir() {
 			continue
 		}
-		err := os.Remove(path.Join(dir, dstEntry.Name()))
+		err := wfs.RemoveFile(path.Join(dir, dstEntry.Name()))
 		if err != nil {
+			if writefs.IsNotExist(err) {
+				continue
+			}
 			return false, err
 		}
 	}
@@ -151,15 +169,20 @@ func readEntries(fs packfs.FS, name string) (srcFiles []string, srcDirs []string
 // CopyFile
 // NOTE: must ensure dst's parent exists
 func CopyFile(fs packfs.FS, name string, dst string) error {
+	return CopyFileWFS(fs, writefs.SysFS{}, name, dst)
+}
+func CopyFileWFS(fs packfs.FS, wfs writefs.FS, name string, dst string) error {
 	content, err := fs.ReadFile(name)
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(dst, content, 0755)
+	writer, err := wfs.OpenFileWrite(dst)
 	if err != nil {
 		return err
 	}
-	return nil
+	defer writer.Close()
+	_, err = writer.Write(content)
+	return err
 }
 
 func HasVendor(dir string) bool {

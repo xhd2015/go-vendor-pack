@@ -5,51 +5,80 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/xhd2015/go-inspect/sh"
+	"github.com/xhd2015/go-vendor-pack/go_cmd"
+	"github.com/xhd2015/go-vendor-pack/writefs"
 )
 
 func AddVersionAndSum(dir string, mod string, version string, sum string, replace string) error {
-	// go mod edit
-	cmds := []string{
-		`go mod edit -require="$IMPORT_PATH@$IMPORT_VERSION"`,
+	return AddVersionAndSumFS(writefs.SysFS{}, dir, mod, version, sum, replace)
+}
+func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, sum string, replace string) error {
+	editGoMod := func(goModFile string) error {
+		err := go_cmd.GoModRequire(goModFile, mod, version)
+		if err != nil {
+			return err
+		}
+		if replace != "" {
+			err := go_cmd.GoModReplace(goModFile, mod, replace)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	if replace != "" {
-		cmds = append(cmds, `go mod edit -replace="$IMPORT_PATH=$IMPORT_REPLACE"`)
-	}
-	_, _, err := sh.RunBashWithOpts(cmds, sh.RunBashOptions{
-		FilterCmd: func(cmd *exec.Cmd) {
-			cmd.Env = os.Environ()
-			cmd.Env = append(cmd.Env, "IMPORT_PATH="+mod)
-			cmd.Env = append(cmd.Env, "IMPORT_VERSION="+version)
-			cmd.Env = append(cmd.Env, "IMPORT_REPLACE="+replace)
-			cmd.Dir = dir
-		},
-	})
-	if err != nil {
-		return err
+	goModFile := filepath.Join(dir, "go.mod")
+	if _, ok := fs.(writefs.SysFS); ok {
+		// go mod edit
+		err := editGoMod(goModFile)
+		if err != nil {
+			return err
+		}
+	} else {
+		reader, err := fs.OpenFileRead(goModFile)
+		if err != nil {
+			return err
+		}
+		defer reader.Close()
+		content, err := ioutil.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+		newContent, err := go_cmd.GoModEdit(string(content), editGoMod)
+		if err != nil {
+			return err
+		}
+		w, err := fs.OpenFileWrite(goModFile)
+		if err != nil {
+			return err
+		}
+		defer w.Close()
+		_, err = w.Write([]byte(newContent))
+		if err != nil {
+			return err
+		}
 	}
 
 	addGoSum := func() error {
 		// append to go sum
 		sumFile := filepath.Join(dir, "go.sum")
-		file, err := os.OpenFile(sumFile, os.O_APPEND|os.O_WRONLY, 0755)
+
+		writer, err := fs.OpenFileAppend(sumFile)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer writer.Close()
 
-		file.WriteString(sum)
+		writer.Write([]byte(sum))
 		if !strings.HasSuffix(sum, "\n") {
-			file.WriteString("\n")
+			writer.Write([]byte("\n"))
 		}
 		return nil
 	}
 	if sum != "" {
-		err = addGoSum()
+		err := addGoSum()
 		if err != nil {
 			return fmt.Errorf("updating go.sum: %w", err)
 		}
@@ -57,12 +86,18 @@ func AddVersionAndSum(dir string, mod string, version string, sum string, replac
 
 	// update modules.txt
 	modulesFile := filepath.Join(dir, "vendor/modules.txt")
-	modulesContent, err := ioutil.ReadFile(modulesFile)
+	modFileReader, err := fs.OpenFileRead(modulesFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// skip optional vendopr
 			return nil
 		}
+		return err
+	}
+	defer modFileReader.Close()
+
+	modulesContent, err := ioutil.ReadAll(modFileReader)
+	if err != nil {
 		return err
 	}
 
@@ -131,10 +166,17 @@ func AddVersionAndSum(dir string, mod string, version string, sum string, replac
 
 	newModulesContent := strings.Join(lines, "\n")
 
-	err = ioutil.WriteFile(modulesFile, []byte(newModulesContent), 0755)
+	w, err := fs.OpenFileWrite(modulesFile)
 	if err != nil {
 		return fmt.Errorf("adding package error:%v %v", mod, err)
 	}
-	log.Printf("module added: %v %v", mod, version)
+	defer w.Close()
+	w.Write([]byte(newModulesContent))
+	if err != nil {
+		return fmt.Errorf("adding package error:%v %v", mod, err)
+	}
+	if verboseLog {
+		log.Printf("module added: %v %v", mod, version)
+	}
 	return nil
 }
