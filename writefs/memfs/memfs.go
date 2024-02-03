@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/xhd2015/go-vendor-pack/writefs"
 )
@@ -14,7 +15,10 @@ import (
 // read and write
 
 type MemFS struct {
-	root *dirEntry
+	// when no empty, will be used as content back store
+	// and later copy will just be a os.Move operation
+	fsDir string
+	root  *dirEntry
 }
 
 var _ writefs.FS = (*MemFS)(nil)
@@ -27,6 +31,20 @@ func New() *MemFS {
 			perm:        0755,
 		},
 	}
+}
+func NewAtFs(fsDir string) *MemFS {
+	return &MemFS{
+		fsDir: fsDir,
+		root: &dirEntry{
+			entryType:   entryType_dir,
+			childrenMap: make(map[string]*dirEntry),
+			perm:        0755,
+		},
+	}
+}
+
+func (c *MemFS) FsDir() string {
+	return c.fsDir
 }
 
 // Stat implements FS.
@@ -71,11 +89,29 @@ func (c *MemFS) openFileWrite(name string, reset bool) (io.WriteCloser, error) {
 		entry.children = append(entry.children, f)
 		entry.childrenMap[baseName] = f
 	}
-	if reset {
+	if reset && c.fsDir == "" {
 		f.buf.Reset()
 	}
 	entry.mutex.Unlock()
 
+	if c.fsDir != "" {
+		fsFile := filepath.Join(c.fsDir, name)
+		err := os.MkdirAll(filepath.Dir(fsFile), 0755)
+		if err != nil {
+			return nil, err
+		}
+		flags := os.O_WRONLY | os.O_CREATE
+		if reset {
+			flags = flags | os.O_TRUNC
+		} else {
+			flags = flags | os.O_APPEND
+		}
+		f, err := os.OpenFile(fsFile, flags, 0755)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
 	return &f.buf, nil
 }
 
@@ -84,6 +120,14 @@ func (c *MemFS) OpenFileRead(name string) (io.ReadCloser, error) {
 	entry, err := navDir(name, c.root, false)
 	if err != nil {
 		return nil, err
+	}
+	if c.fsDir != "" {
+		fsFile := filepath.Join(c.fsDir, name)
+		f, err := os.Open(fsFile)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
 	}
 	// read buf will advance buf.off, which
 	// will change state, so we make
