@@ -92,12 +92,14 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	modulesMapping, modules, err := GetGoListModules(dir)
+
+	goMod, err := go_cmd.ParseGoMod(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	goMod, err := go_cmd.ParseGoMod(dir)
+	// modulesMapping, modules, err := GetGoListModules(dir, goMod)
+	modulesMapping, modules, err := GetGoListModulesByPkgs(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -386,12 +388,119 @@ func UpdateGoVersions(dir string) error {
 
 // can use this: go:generate cd pkg && go list -f '{{.ImportPath}} {{if .Module}}{{.Module.Version}}{{else}}{{end}}' -deps > go.mod.versions
 // main module is excluded
-func GetGoListModules(dir string) (map[string]*pack_model.Module, []*pack_model.Module, error) {
+func GetGoListModules(dir string, goMod *model.GoMod) (map[string]*pack_model.Module, []*pack_model.Module, error) {
+	mods, err := go_cmd.ListAllModules(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	vendor := filepath.Join(dir, "vendor")
+	_, err = os.Stat(vendor)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("vendor not exists, run 'go mod vendor' first %w", err)
+		}
+		return nil, nil, err
+	}
+
+	moduleMapping := make(map[string]*pack_model.Module)
+	var modules []*pack_model.Module
+
+	// modPath -> dir
+	replaceMapping := make(map[string]string, len(goMod.Replace))
+	for _, replace := range goMod.Replace {
+		// TODO: test replace with mod
+		if strings.HasPrefix(replace.New.Path, "./") {
+			replaceMapping[replace.Old.Path] = filepath.Join(dir, replace.New.Path[len("./"):])
+			continue
+		}
+		if strings.HasPrefix(replace.New.Path, "../") {
+			newPath := replace.New.Path
+			newDir := dir
+			for strings.HasPrefix(newPath, "../") {
+				newPath = newPath[len("../"):]
+				idx := strings.LastIndex(newDir, "/")
+				if idx < 0 {
+					return nil, nil, fmt.Errorf("bad replace path: %s %s", replace.New.Path, dir)
+				}
+				newDir = newDir[:idx]
+			}
+			replaceMapping[replace.Old.Path] = filepath.Join(newDir, newPath)
+			continue
+		}
+		if strings.HasPrefix(replace.New.Path, "/") {
+			replaceMapping[replace.Old.Path] = replace.New.Path
+			continue
+		}
+		return nil, nil, fmt.Errorf("unable to handle replace with mod path: %+v", replace)
+	}
+
+	// walk vendor dir to
+	for _, mod := range mods {
+		if mod.Path == goMod.Module.Path {
+			// skip main mod, as it is a container mod
+			continue
+		}
+		m := &pack_model.Module{
+			ModulePublic: &model.ModulePublic{
+				Path:      mod.Path,
+				Version:   mod.Version,
+				GoVersion: mod.GoVersion,
+				Indirect:  mod.Indirect,
+				Time:      mod.Time,
+			},
+		}
+		// replaced or in vendor
+		modDir := replaceMapping[mod.Path]
+		if modDir == "" {
+			modDir = filepath.Join(vendor, mod.Path)
+		}
+		err := traversePkgDir(m, modDir, mod.Path, func(pkgPath string) {
+			m.Packages = append(m.Packages, &model.PackagePublic{
+				ImportPath: pkgPath,
+				// NOTE: name not provided
+			})
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		moduleMapping[mod.Path] = m
+		modules = append(modules, m)
+	}
+	return moduleMapping, modules, nil
+}
+
+func traversePkgDir(mod *pack_model.Module, pkgDir string, pkgPath string, f func(pkgPath string)) error {
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return err
+	}
+
+	var hasGoFile bool
+	for _, e := range entries {
+		if !e.IsDir() {
+			hasGoFile = hasGoFile || strings.HasSuffix(e.Name(), ".go")
+			continue
+		}
+		err := traversePkgDir(mod, filepath.Join(pkgDir, e.Name()), pkgPath+"/"+e.Name(), f)
+		if err != nil {
+			return err
+		}
+	}
+	if hasGoFile {
+		//  optimize: add as package only if has any .go file
+		f(pkgPath)
+	}
+	return nil
+}
+
+func GetGoListModulesByPkgs(dir string) (map[string]*pack_model.Module, []*pack_model.Module, error) {
 	pkgs, err := go_cmd.ListPackages(dir)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	listedPkgs := make(map[string]bool)
 	moduleMapping := make(map[string]*pack_model.Module)
 	var modules []*pack_model.Module
 	for _, pkg := range pkgs {
@@ -410,15 +519,49 @@ func GetGoListModules(dir string) (map[string]*pack_model.Module, []*pack_model.
 					Version:   pkg.Module.Version,
 					GoVersion: pkg.Module.GoVersion,
 					Indirect:  pkg.Module.Indirect,
+					Main:      pkg.Module.Main,
 				},
 			}
 			modules = append(modules, mod)
 			moduleMapping[pkg.Module.Path] = mod
 		}
+		listedPkgs[pkg.ImportPath] = true
 		mod.Packages = append(mod.Packages, &model.PackagePublic{
 			ImportPath: pkg.ImportPath,
 			Name:       pkg.Name,
 		})
 	}
+
+	vendor := filepath.Join(dir, "vendor")
+	_, err = os.Stat(vendor)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("vendor not exists, run 'go mod vendor' first %w", err)
+		}
+		return nil, nil, err
+	}
+	// find any extra pkgs inside vendor directory
+	// because normally 'go list -deps' will only include
+	// pkgs matching current build, but we actually
+	// want all files for all builds
+	for _, mod := range modules {
+		if mod.Main {
+			continue
+		}
+		// NOTE:
+		//  - if mod is replaced with same mod path, different path, it is still placed in vendor
+		// however here we do not handle replacing with different mod path
+		traversePkgDir(mod, filepath.Join(vendor, mod.Path), mod.Path, func(pkgPath string) {
+			if listedPkgs[pkgPath] {
+				return
+			}
+			// log.Printf("DEBUG found extra pkg: %v", pkgPath)
+			mod.Packages = append(mod.Packages, &model.PackagePublic{
+				ImportPath: pkgPath,
+				// Name :"", // name not resolved
+			})
+		})
+	}
+
 	return moduleMapping, modules, nil
 }

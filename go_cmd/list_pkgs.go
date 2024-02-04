@@ -9,6 +9,8 @@ import (
 	"github.com/xhd2015/go-vendor-pack/go_cmd/model"
 )
 
+// NOTE: go list -deps -json will only reports package required by current
+// go version, that is not sufficient for a general pureposed packer
 func ListPackages(dir string, args ...string) ([]*model.PackagePublic, error) {
 	var buf bytes.Buffer
 	var errBuf bytes.Buffer
