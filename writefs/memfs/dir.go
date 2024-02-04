@@ -18,7 +18,6 @@ type MemFileInfo interface {
 	fs.FileInfo
 
 	Parent() MemFileInfo
-	Buffer() *bytes.Buffer
 	GetData() interface{}
 	SetData(data interface{})
 }
@@ -89,10 +88,6 @@ func (c *dirEntry) GetData() interface{} {
 }
 func (c *dirEntry) SetData(data interface{}) {
 	c.data = data
-}
-
-func (c *dirEntry) Buffer() *bytes.Buffer {
-	return &c.buf.Buffer
 }
 
 func navParent(path string, root *dirEntry) (*dirEntry, string, error) {
