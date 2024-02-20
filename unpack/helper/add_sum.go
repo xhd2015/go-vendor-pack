@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -88,7 +87,7 @@ func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, s
 	modulesFile := filepath.Join(dir, "vendor/modules.txt")
 	modFileReader, err := fs.OpenFileRead(modulesFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if writefs.IsNotExist(err) {
 			// skip optional vendopr
 			return nil
 		}
