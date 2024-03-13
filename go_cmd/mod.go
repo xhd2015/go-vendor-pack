@@ -10,21 +10,21 @@ import (
 	"github.com/xhd2015/go-vendor-pack/go_cmd/model"
 )
 
-func ParseGoMod(dir string) (*model.GoMod, error) {
+func ParseGoMod(dirOrFile string) (*model.GoMod, error) {
 	var buf bytes.Buffer
 	var errBuf bytes.Buffer
 
-	stat, err := os.Stat(dir)
+	stat, err := os.Stat(dirOrFile)
 	if err != nil {
 		return nil, err
 	}
 
 	cmd := exec.Command("go", "mod", "edit", "-json")
 	if stat.IsDir() {
-		cmd.Dir = dir
+		cmd.Dir = dirOrFile
 	} else {
 		// actual file
-		cmd.Args = append(cmd.Args, dir)
+		cmd.Args = append(cmd.Args, dirOrFile)
 	}
 	cmd.Stdout = &buf
 	cmd.Stderr = &errBuf

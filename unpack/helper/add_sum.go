@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/xhd2015/go-vendor-pack/go_cmd"
+	"github.com/xhd2015/go-vendor-pack/go_cmd/model"
 	"github.com/xhd2015/go-vendor-pack/writefs"
 )
 
@@ -28,10 +29,15 @@ func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, s
 		}
 		return nil
 	}
+	var goMod *model.GoMod
 	goModFile := filepath.Join(dir, "go.mod")
 	if _, ok := fs.(writefs.SysFS); ok {
 		// go mod edit
 		err := editGoMod(goModFile)
+		if err != nil {
+			return err
+		}
+		goMod, err = go_cmd.ParseGoMod(goModFile)
 		if err != nil {
 			return err
 		}
@@ -55,6 +61,11 @@ func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, s
 		}
 		defer w.Close()
 		_, err = w.Write([]byte(newContent))
+		if err != nil {
+			return err
+		}
+
+		goMod, err = go_cmd.ParseGoModContent(newContent)
 		if err != nil {
 			return err
 		}
@@ -132,7 +143,7 @@ func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, s
 		needAppendExplicit = true
 	} else {
 		// force replace version
-		if i+1 >= n || strings.TrimSpace(lines[i+1]) != "## explicit" {
+		if i+1 >= n || !strings.HasPrefix(lines[i+1], "## explicit") {
 			// found detailed list, remove all packages until next module(starts with #)
 			// replace with explicit
 			for j := i + 1; j <= n; j++ {
@@ -151,14 +162,22 @@ func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, s
 			lines[i] = prefixModSpace + version
 		}
 	}
+
+	// NOTE: explicit can also have this form
+	//     ## explicit; go 1.18
 	if needAppendExplicit {
 		// format:
 		//   # MODULE VERSION
 		//   ## explicit
-		//   # PKG
+		//   PKG
+		//
+		explicit := "## explicit"
+		if goMod != nil && goMod.Go != "" {
+			explicit = explicit + "; go" + goMod.Go
+		}
 		lines = append(lines,
 			prefixModSpace+version,
-			"## explicit",
+			explicit,
 			mod,
 		)
 	}
@@ -170,7 +189,7 @@ func AddVersionAndSumFS(fs writefs.FS, dir string, mod string, version string, s
 		return fmt.Errorf("adding package error:%v %v", mod, err)
 	}
 	defer w.Close()
-	w.Write([]byte(newModulesContent))
+	_, err = w.Write([]byte(newModulesContent))
 	if err != nil {
 		return fmt.Errorf("adding package error:%v %v", mod, err)
 	}
