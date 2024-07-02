@@ -21,43 +21,67 @@ func Bind(v interface{}) {
 	t := rv.Type()
 	n := rv.NumField()
 	for i := 0; i < n; i++ {
-		field := rv.Field(i)
-		fieldType := t.Field(i)
+		fieldValue := rv.Field(i)
+		field := t.Field(i)
 
-		if fieldType.Anonymous {
+		if field.Anonymous {
 			// recursively parse
-			Bind(field.Addr().Interface())
+			Bind(fieldValue.Addr().Interface())
 			continue
 		}
 
-		s := fieldType.Tag.Get("prog")
+		s := field.Tag.Get("prog")
 		if s == "" {
 			continue
 		}
 
 		list := strings.SplitN(s, " ", 3)
 		if len(list) != 3 {
-			panic(fmt.Errorf("invalid option: %v, require 3 parts,actual: %d", fieldType.Name, len(list)))
+			panic(fmt.Errorf("invalid option: %v, require 3 parts,actual: %d", field.Name, len(list)))
 		}
 		flagName := list[0]
 		defaulVal := list[1]
 		help := list[2]
 
-		switch field.Kind() {
+		var bad bool
+		switch fieldValue.Kind() {
 		case reflect.String:
 			if defaulVal == "''" {
 				defaulVal = ""
 			}
-			flag.StringVar(field.Addr().Interface().(*string), flagName, defaulVal, help)
+			flag.StringVar(fieldValue.Addr().Interface().(*string), flagName, defaulVal, help)
 		case reflect.Bool:
 			v, err := strconv.ParseBool(defaulVal)
 			if err != nil {
-				panic(fmt.Errorf("parsing %s as bool: invalid default value %s", fieldType.Name, defaulVal))
+				panic(fmt.Errorf("parsing %s as bool: invalid default value %s", field.Name, defaulVal))
 			}
-			flag.BoolVar(field.Addr().Interface().(*bool), flagName, v, help)
+			flag.BoolVar(fieldValue.Addr().Interface().(*bool), flagName, v, help)
+		case reflect.Slice:
+			if field.Type.Elem().Kind() == reflect.String {
+				// []string
+				plist := fieldValue.Addr().Interface().(*[]string)
+				flag.Var(strSlice{plist}, flagName, help)
+			} else {
+				bad = true
+			}
 		default:
-			panic(fmt.Errorf("unsupported type: %s %s", fieldType.Name, field.Type()))
+			bad = true
+		}
+		if bad {
+			panic(fmt.Errorf("unsupported type: %s %s", field.Name, fieldValue.Type()))
 		}
 	}
+}
 
+type strSlice struct {
+	ptr *[]string
+}
+
+func (c strSlice) String() string {
+	return strings.Join(*c.ptr, ",")
+}
+
+func (c strSlice) Set(value string) error {
+	*c.ptr = append(*c.ptr, value)
+	return nil
 }

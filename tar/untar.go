@@ -91,10 +91,11 @@ func NewTarFS(r io.Reader) (packfs.FS, error) {
 		if err != nil {
 			return err, false
 		}
-		mapping[header.Name] = &info{
+		name := normalize(header.Name)
+		mapping[name] = &info{
 			header: header,
 			self: &dirEntry{
-				name:  filepath.Base(header.Name),
+				name:  basename(name),
 				isDir: header.Typeflag == tar.TypeDir,
 			},
 			content: content,
@@ -115,7 +116,7 @@ func NewTarFS(r io.Reader) (packfs.FS, error) {
 
 func fillTree(mapping map[string]*info) error {
 	for name, inf := range mapping {
-		parent := filepath.Dir(name)
+		parent := dirname(name)
 		if parent == "" || parent == "." || parent == "/" {
 			continue
 		}
@@ -127,6 +128,37 @@ func fillTree(mapping map[string]*info) error {
 	}
 	return nil
 }
+
+func basename(s string) string {
+	if s == "" || s == "/" {
+		return s
+	}
+	idx := strings.LastIndex(s, "/")
+	if idx < 0 {
+		return s
+	}
+	return s[idx+1:]
+}
+
+func dirname(s string) string {
+	if s == "" || s == "/" {
+		return ""
+	}
+	idx := strings.LastIndex(s, "/")
+	if idx < 0 {
+		return ""
+	}
+	return s[:idx]
+}
+
+func normalize(name string) string {
+	name = strings.TrimPrefix(name, "./")
+	if name != "/" {
+		name = strings.TrimSuffix(name, "/")
+	}
+	return name
+}
+
 func dirPrefixWith(dir string, prefix string) bool {
 	if len(dir) <= len(prefix) {
 		return false
