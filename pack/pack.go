@@ -187,6 +187,12 @@ func PackAsBase64(dir string, opts *Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// base64.Encoder buffers 1–2 leftover bytes until Close. Skipping
+	// Close drops the gzip footer whenever the compressed length is
+	// not a multiple of 3.
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
 
 	return buf.Bytes(), nil
 }
