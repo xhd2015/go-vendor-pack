@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      COVERPKG: github.com/xhd2015/go-vendor-pack/...
+      COVERMODE: set
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go test
+        run: |
+          go test -count=1 \
+            -covermode="$COVERMODE" \
+            -coverpkg="$COVERPKG" \
+            -coverprofile=coverage-gotest.out \
+            ./...
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ ! -s coverage-gotest.out ]]; then
+            echo "No coverage-gotest.out" >&2
+            exit 1
+          fi
+          go tool cover -func=coverage-gotest.out | tee coverage-func.txt
+          {
+            echo "## Coverage"
+            echo ""
+            echo '```'
+            go tool cover -func=coverage-gotest.out | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          if-no-files-found: ignore
+          path: |
+            coverage-gotest.out
+            coverage-func.txt
